@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>قارئ أكواد العبوات</title>
+  <title>قارئ أكواد العبوات الذكي</title>
   
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
@@ -23,10 +23,11 @@
     .btn-sort { background: #ffc107; color: #333 !important; }
 
     #itemsList { list-style: none; padding: 0; margin: 0; }
-    .item-card { background: white; border-radius: 8px; padding: 10px; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
-    .item-card img { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd; }
-    .item-card input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; font-weight: bold; color: #333; }
-    .item-card .handle { cursor: grab; font-size: 22px; color: #aaa; padding: 0 5px; }
+    .item-card { background: white; border-radius: 8px; padding: 10px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
+    .item-card img { width: 70px; height: 70px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd; }
+    
+    .item-card textarea { flex: 1; height: 65px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; font-weight: bold; resize: vertical; line-height: 1.4; }
+    .item-card .handle { cursor: grab; font-size: 24px; color: #aaa; padding: 0 5px; }
     .btn-del { background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: bold; }
 
     .loading { text-align: center; display: none; color: #007bff; font-weight: bold; margin-bottom: 15px; font-size: 16px; }
@@ -40,15 +41,15 @@
 </head>
 <body>
 
-  <h2>ماسح أكواد العبوات</h2>
+  <h2>ماسح أكواد العبوات (عربي + إنجليزي)</h2>
 
   <label class="btn-camera" for="cameraInput">📸 التقط صورة للكود</label>
   <input type="file" id="cameraInput" accept="image/*" capture="environment">
 
-  <div id="loading" class="loading">جاري قراءة واستخراج النص... يرجى الانتظار ⏳</div>
+  <div id="loading" class="loading">جاري تصفية الصورة وقراءة العربي والإنجليزي... ⏳</div>
 
   <div class="actions">
-    <button class="btn-sort" onclick="sortAlphabetically()">ترتيب أوتوماتيك (أ-ي)</button>
+    <button class="btn-sort" onclick="sortAlphabetically()">ترتيب أوتوماتيك</button>
     <button class="btn-excel" onclick="exportToExcel()">تصدير Excel</button>
     <button class="btn-word" onclick="exportToWord()">تصدير Word</button>
     <button class="btn-print" onclick="printData()">طباعة</button>
@@ -57,26 +58,88 @@
   <ul id="itemsList"></ul>
   <div id="printableArea" style="display:none;"></div>
 
+  <!-- عنصر مخفي لتنقية الصورة بالفلتر -->
+  <canvas id="filterCanvas" style="display:none;"></canvas>
+
   <script>
     const cameraInput = document.getElementById('cameraInput');
     const itemsList = document.getElementById('itemsList');
     const loading = document.getElementById('loading');
+    const canvas = document.getElementById('filterCanvas');
+    const ctx = canvas.getContext('2d');
 
     new Sortable(itemsList, { handle: '.handle', animation: 150 });
+
+    // فلتر ذكي لتوضيح الحبر ومسح لمعة البلاستيك والظلال
+    function enhanceImage(file) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1500;
+          let w = img.width, h = img.height;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) { h = (h * maxDim) / w; w = maxDim; }
+            else { w = (w * maxDim) / h; h = maxDim; }
+          }
+          canvas.width = w;
+          canvas.height = h;
+
+          ctx.drawImage(img, 0, 0, w, h);
+          const imgData = ctx.getImageData(0, 0, w, h);
+          const d = imgData.data;
+
+          // تحويل لأبيض وأسود مع زيادة حادة في التباين
+          for (let i = 0; i < d.length; i += 4) {
+            const v = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+            // رفع التباين بشدة لتوضيح الخطوط المنقطة والعربية
+            const factor = 2.0;
+            let color = factor * (v - 128) + 128;
+            color = color > 130 ? 255 : (color < 100 ? 0 : color); // تنقية الخلفية
+
+            d[i] = color;
+            d[i+1] = color;
+            d[i+2] = color;
+          }
+          ctx.putImageData(imgData, 0, 0);
+          resolve(canvas.toDataURL('image/jpeg', 0.9));
+        };
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    // تنظيف النصوص من الشوائب والرموز الغريبة
+    function cleanExtractedText(rawText) {
+      return rawText
+        .split('\n')
+        .map(line => {
+          // مسح الرموز الشاذة وترك الحروف العربية والإنجليزية والأرقام وعلامات التواريخ فقط
+          return line.replace(/[^a-zA-Z0-9\u0600-\u06FF\s\-\/\:\.\,\#]/g, '').trim();
+        })
+        .filter(line => line.length > 1) // مسح السطور الميتة
+        .join('\n')
+        .trim();
+    }
 
     cameraInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
       loading.style.display = 'block';
-      const imgUrl = URL.createObjectURL(file);
+      const originalImgUrl = URL.createObjectURL(file);
 
       try {
-        const result = await Tesseract.recognize(file, 'eng+ara');
-        const text = result.data.text.trim();
-        addItem(imgUrl, text);
+        // 1. تنقية وتوضيح الصورة بالفلتر البرمجي
+        const processedImageUrl = await enhanceImage(file);
+
+        // 2. قراءة العربي والإنجليزي معاً
+        const result = await Tesseract.recognize(processedImageUrl, 'ara+eng');
+        
+        // 3. مسح الطلاسم والشخبطة
+        const finalCleanText = cleanExtractedText(result.data.text);
+        
+        addItem(originalImgUrl, finalCleanText || "لم يتم التعرف على الكود بدقة");
       } catch (err) {
-        alert('حدث خطأ أثناء قراءة الصورة، يرجى المحاولة مرة أخرى.');
+        alert('حدث خطأ أثناء فحص الصورة!');
         console.error(err);
       } finally {
         loading.style.display = 'none';
@@ -87,12 +150,29 @@
     function addItem(imgSrc, text) {
       const li = document.createElement('li');
       li.className = 'item-card';
-      li.innerHTML = `
-        <span class="handle">☰</span>
-        <img src="${imgSrc}">
-        <input type="text" class="code-text" value="${text}" placeholder="الكود المقروء">
-        <button class="btn-del" onclick="this.parentElement.remove()">حذف</button>
-      `;
+
+      const handle = document.createElement('span');
+      handle.className = 'handle';
+      handle.innerText = '☰';
+
+      const img = document.createElement('img');
+      img.src = imgSrc;
+
+      const textarea = document.createElement('textarea');
+      textarea.className = 'code-text';
+      textarea.value = text;
+      textarea.placeholder = "الكود المقروء";
+
+      const btnDel = document.createElement('button');
+      btnDel.className = 'btn-del';
+      btnDel.innerText = 'حذف';
+      btnDel.onclick = () => li.remove();
+
+      li.appendChild(handle);
+      li.appendChild(img);
+      li.appendChild(textarea);
+      li.appendChild(btnDel);
+
       itemsList.appendChild(li);
     }
 
@@ -110,7 +190,7 @@
       const inputs = document.querySelectorAll('.code-text');
       return Array.from(inputs).map((input, index) => ({
         "م": index + 1,
-        "الكود": input.value
+        "البيانات المقروءة": input.value.replace(/\n/g, ' | ')
       }));
     }
 
@@ -119,23 +199,23 @@
       if (data.length === 0) return alert('لا توجد بيانات لتصديرها!');
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "الأكواد");
-      XLSX.writeFile(wb, "Package_Codes.xlsx");
+      XLSX.utils.book_append_sheet(wb, ws, "البيانات");
+      XLSX.writeFile(wb, "Package_Data.xlsx");
     }
 
     function exportToWord() {
       const data = getOrderedData();
       if (data.length === 0) return alert('لا توجد بيانات لتصديرها!');
-      let content = `<html><head><meta charset="utf-8"></head><body dir="rtl"><h2>قائمة الأكواد</h2><table border="1" cellpadding="6" style="border-collapse:collapse; width:100%;"><tr><th>م</th><th>الكود</th></tr>`;
+      let content = `<html><head><meta charset="utf-8"></head><body dir="rtl"><h2>قائمة بيانات العبوات</h2><table border="1" cellpadding="6" style="border-collapse:collapse; width:100%;"><tr><th>م</th><th>البيانات</th></tr>`;
       data.forEach(item => {
-        content += `<tr><td>${item['م']}</td><td>${item['الكود']}</td></tr>`;
+        content += `<tr><td>${item['م']}</td><td>${item['البيانات المقروءة']}</td></tr>`;
       });
       content += `</table></body></html>`;
       const blob = new Blob(['\ufeff' + content], { type: 'application/msword' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'Package_Codes.doc';
+      a.download = 'Package_Data.doc';
       a.click();
     }
 
@@ -143,9 +223,9 @@
       const data = getOrderedData();
       if (data.length === 0) return alert('لا توجد بيانات للطباعة!');
       const printArea = document.getElementById('printableArea');
-      let table = `<h2 style="text-align:center;">قائمة الأكواد</h2><table border="1" cellpadding="8" style="width:100%; border-collapse:collapse; text-align:right;"><tr><th>م</th><th>الكود</th></tr>`;
+      let table = `<h2 style="text-align:center;">قائمة بيانات العبوات</h2><table border="1" cellpadding="8" style="width:100%; border-collapse:collapse; text-align:right;"><tr><th>م</th><th>البيانات</th></tr>`;
       data.forEach(item => {
-        table += `<tr><td>${item['م']}</td><td>${item['الكود']}</td></tr>`;
+        table += `<tr><td>${item['م']}</td><td>${item['البيانات المقروءة']}</td></tr>`;
       });
       table += `</table>`;
       printArea.innerHTML = table;
