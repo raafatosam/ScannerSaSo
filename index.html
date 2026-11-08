@@ -16,7 +16,7 @@
     #cameraInput { display: none; }
     
     .actions { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
-    .actions button { flex: 1; min-width: 100px; padding: 12px 8px; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; font-size: 14px; }
+    .actions button { flex: 1; min-width: 90px; padding: 12px 6px; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; font-size: 14px; }
     .btn-excel { background: #28a745; }
     .btn-word { background: #17a2b8; }
     .btn-print { background: #6c757d; }
@@ -41,12 +41,12 @@
 </head>
 <body>
 
-  <h2>ماسح أكواد العبوات (عربي + إنجليزي)</h2>
+  <h2>ماسح أكواد العبوات الذكي</h2>
 
-  <label class="btn-camera" for="cameraInput">📸 التقط صورة للكود</label>
+  <label class="btn-camera" for="cameraInput">📸 التقط صورة للعلبة</label>
   <input type="file" id="cameraInput" accept="image/*" capture="environment">
 
-  <div id="loading" class="loading">جاري تصفية الصورة وقراءة العربي والإنجليزي... ⏳</div>
+  <div id="loading" class="loading">جاري عزل التصميم وقراءة النصوص الحقيقية تلقائياً... ⏳</div>
 
   <div class="actions">
     <button class="btn-sort" onclick="sortAlphabetically()">ترتيب أوتوماتيك</button>
@@ -57,25 +57,23 @@
 
   <ul id="itemsList"></ul>
   <div id="printableArea" style="display:none;"></div>
-
-  <!-- عنصر مخفي لتنقية الصورة بالفلتر -->
-  <canvas id="filterCanvas" style="display:none;"></canvas>
+  <canvas id="processCanvas" style="display:none;"></canvas>
 
   <script>
     const cameraInput = document.getElementById('cameraInput');
     const itemsList = document.getElementById('itemsList');
     const loading = document.getElementById('loading');
-    const canvas = document.getElementById('filterCanvas');
+    const canvas = document.getElementById('processCanvas');
     const ctx = canvas.getContext('2d');
 
     new Sortable(itemsList, { handle: '.handle', animation: 150 });
 
-    // فلتر ذكي لتوضيح الحبر ومسح لمعة البلاستيك والظلال
-    function enhanceImage(file) {
+    // فلتر آلي لتحويل الصورة لأبيض وأسود عالي التباين لعزل الرسومات والألوان
+    function autoIsolateText(file) {
       return new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
-          const maxDim = 1500;
+          const maxDim = 1600;
           let w = img.width, h = img.height;
           if (w > maxDim || h > maxDim) {
             if (w > h) { h = (h * maxDim) / w; w = maxDim; }
@@ -88,36 +86,19 @@
           const imgData = ctx.getImageData(0, 0, w, h);
           const d = imgData.data;
 
-          // تحويل لأبيض وأسود مع زيادة حادة في التباين
+          // خوارزمية ذكية لعزل الحبر عن أي لون خلفية أو لمعة
           for (let i = 0; i < d.length; i += 4) {
-            const v = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-            // رفع التباين بشدة لتوضيح الخطوط المنقطة والعربية
-            const factor = 2.0;
-            let color = factor * (v - 128) + 128;
-            color = color > 130 ? 255 : (color < 100 ? 0 : color); // تنقية الخلفية
-
-            d[i] = color;
-            d[i+1] = color;
-            d[i+2] = color;
+            const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+            // تحويل حاد: الكتابة أسود والخلفية والتصميم أبيض
+            const threshold = 120;
+            const val = gray > threshold ? 255 : 0;
+            d[i] = d[i+1] = d[i+2] = val;
           }
           ctx.putImageData(imgData, 0, 0);
-          resolve(canvas.toDataURL('image/jpeg', 0.9));
+          resolve(canvas.toDataURL('image/jpeg', 0.95));
         };
         img.src = URL.createObjectURL(file);
       });
-    }
-
-    // تنظيف النصوص من الشوائب والرموز الغريبة
-    function cleanExtractedText(rawText) {
-      return rawText
-        .split('\n')
-        .map(line => {
-          // مسح الرموز الشاذة وترك الحروف العربية والإنجليزية والأرقام وعلامات التواريخ فقط
-          return line.replace(/[^a-zA-Z0-9\u0600-\u06FF\s\-\/\:\.\,\#]/g, '').trim();
-        })
-        .filter(line => line.length > 1) // مسح السطور الميتة
-        .join('\n')
-        .trim();
     }
 
     cameraInput.addEventListener('change', async (e) => {
@@ -128,18 +109,29 @@
       const originalImgUrl = URL.createObjectURL(file);
 
       try {
-        // 1. تنقية وتوضيح الصورة بالفلتر البرمجي
-        const processedImageUrl = await enhanceImage(file);
+        // 1. عزل التصميم والألوان في الخلفية أوتوماتيكياً
+        const processedImage = await autoIsolateText(file);
 
-        // 2. قراءة العربي والإنجليزي معاً
-        const result = await Tesseract.recognize(processedImageUrl, 'ara+eng');
+        // 2. فحص النصوص بالذكاء الاصطناعي (عربي + إنجليزي)
+        const result = await Tesseract.recognize(processedImage, 'ara+eng');
         
-        // 3. مسح الطلاسم والشخبطة
-        const finalCleanText = cleanExtractedText(result.data.text);
-        
-        addItem(originalImgUrl, finalCleanText || "لم يتم التعرف على الكود بدقة");
+        // 3. فلتر نسبة الثقة: طرد الرسومات واللوجوهات والاحتفاظ بالنصوص الحقيقية فقط
+        const validWords = [];
+        if (result.data && result.data.words) {
+          result.data.words.forEach(word => {
+            // الكلمة لازم تكون بنسبة تأكد أكتر من 55% وليست رموزاً شاذة
+            const clean = word.text.replace(/[^a-zA-Z0-9\u0600-\u06FF\-\/\:\.]/g, '').trim();
+            if (word.confidence >= 55 && clean.length > 1) {
+              validWords.push(clean);
+            }
+          });
+        }
+
+        const finalText = validWords.join(' ').trim();
+        addItem(originalImgUrl, finalText || "لم يتم العثور على نص واضح (تأكد من الإضاءة)");
+
       } catch (err) {
-        alert('حدث خطأ أثناء فحص الصورة!');
+        alert('حدث خطأ أثناء قراءة الصورة!');
         console.error(err);
       } finally {
         loading.style.display = 'none';
@@ -161,7 +153,7 @@
       const textarea = document.createElement('textarea');
       textarea.className = 'code-text';
       textarea.value = text;
-      textarea.placeholder = "الكود المقروء";
+      textarea.placeholder = "النص المقروء";
 
       const btnDel = document.createElement('button');
       btnDel.className = 'btn-del';
@@ -190,7 +182,7 @@
       const inputs = document.querySelectorAll('.code-text');
       return Array.from(inputs).map((input, index) => ({
         "م": index + 1,
-        "البيانات المقروءة": input.value.replace(/\n/g, ' | ')
+        "البيانات المقروءة": input.value
       }));
     }
 
@@ -206,7 +198,7 @@
     function exportToWord() {
       const data = getOrderedData();
       if (data.length === 0) return alert('لا توجد بيانات لتصديرها!');
-      let content = `<html><head><meta charset="utf-8"></head><body dir="rtl"><h2>قائمة بيانات العبوات</h2><table border="1" cellpadding="6" style="border-collapse:collapse; width:100%;"><tr><th>م</th><th>البيانات</th></tr>`;
+      let content = `<html><head><meta charset="utf-8"></head><body dir="rtl"><h2>بيانات العبوات</h2><table border="1" cellpadding="6" style="border-collapse:collapse; width:100%;"><tr><th>م</th><th>البيانات</th></tr>`;
       data.forEach(item => {
         content += `<tr><td>${item['م']}</td><td>${item['البيانات المقروءة']}</td></tr>`;
       });
@@ -223,7 +215,7 @@
       const data = getOrderedData();
       if (data.length === 0) return alert('لا توجد بيانات للطباعة!');
       const printArea = document.getElementById('printableArea');
-      let table = `<h2 style="text-align:center;">قائمة بيانات العبوات</h2><table border="1" cellpadding="8" style="width:100%; border-collapse:collapse; text-align:right;"><tr><th>م</th><th>البيانات</th></tr>`;
+      let table = `<h2 style="text-align:center;">بيانات العبوات</h2><table border="1" cellpadding="8" style="width:100%; border-collapse:collapse; text-align:right;"><tr><th>م</th><th>البيانات</th></tr>`;
       data.forEach(item => {
         table += `<tr><td>${item['م']}</td><td>${item['البيانات المقروءة']}</td></tr>`;
       });
