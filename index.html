@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>قارئ أكواد العبوات الذكي</title>
+  <title>قارئ ومزامن العبوات الذكي</title>
   
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
@@ -11,7 +11,15 @@
 
   <style>
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f8; margin: 0; padding: 15px; }
-    h2 { text-align: center; color: #333; margin-bottom: 20px; }
+    h2 { text-align: center; color: #333; margin-bottom: 15px; }
+    
+    /* شريط المزامنة السحابية */
+    .sync-bar { background: #fff; padding: 12px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 8px; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.06); }
+    .sync-bar input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; font-weight: bold; }
+    .btn-sync { background: #6f42c1; color: white; border: none; padding: 10px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ccc; display: inline-block; }
+    .status-online { background: #28a745; }
+
     .btn-camera { display: block; width: 100%; padding: 16px; background: #007bff; color: white; text-align: center; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,123,255,0.2); }
     #cameraInput { display: none; }
     
@@ -41,12 +49,19 @@
 </head>
 <body>
 
-  <h2>ماسح أكواد العبوات الذكي</h2>
+  <h2>ماسح ومزامن العبوات الذكي</h2>
+
+  <!-- شريط المزامنة بين الأجهزة -->
+  <div class="sync-bar">
+    <span id="statusIndicator" class="status-dot"></span>
+    <input type="text" id="roomCodeInput" placeholder="كود الربط المشترك (مثلاً: saso77)">
+    <button class="btn-sync" onclick="connectSync()">اتصال 🔄</button>
+  </div>
 
   <label class="btn-camera" for="cameraInput">📸 التقط صورة للعلبة</label>
   <input type="file" id="cameraInput" accept="image/*" capture="environment">
 
-  <div id="loading" class="loading">جاري عزل التصميم وقراءة النصوص الحقيقية تلقائياً... ⏳</div>
+  <div id="loading" class="loading">جاري قراءة النص ومزامنته مع الأجهزة الأخرى... ⏳</div>
 
   <div class="actions">
     <button class="btn-sort" onclick="sortAlphabetically()">ترتيب أوتوماتيك</button>
@@ -65,15 +80,58 @@
     const loading = document.getElementById('loading');
     const canvas = document.getElementById('processCanvas');
     const ctx = canvas.getContext('2d');
+    const roomInput = document.getElementById('roomCodeInput');
+    const statusIndicator = document.getElementById('statusIndicator');
+
+    let currentRoom = localStorage.getItem('scanner_room') || '';
+    let eventSource = null;
+    const loadedItemIds = new Set();
 
     new Sortable(itemsList, { handle: '.handle', animation: 150 });
 
-    // فلتر آلي لتحويل الصورة لأبيض وأسود عالي التباين لعزل الرسومات والألوان
+    // تشغيل الربط التلقائي لو المستخدم كان كاتب كود قبل كده
+    if (currentRoom) {
+      roomInput.value = currentRoom;
+      connectSync();
+    }
+
+    // دالة الاتصال بالغرفة السحابية
+    function connectSync() {
+      const room = roomInput.value.trim().toLowerCase();
+      if (!room) return alert('يرجى كتابة كود للربط المشترك!');
+
+      currentRoom = room;
+      localStorage.setItem('scanner_room', currentRoom);
+
+      if (eventSource) eventSource.close();
+
+      statusIndicator.className = 'status-dot status-online';
+
+      // فتح قناة اتصال سحابية فورية تقرأ آخر العمليات وتنتظر أي صورة جديدة
+      eventSource = new EventSource(`https://ntfy.sh/${currentRoom}_scanner/sse?since=12h`);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.event === 'message') {
+            const item = JSON.parse(data.message);
+            if (!loadedItemIds.has(item.id)) {
+              loadedItemIds.add(item.id);
+              renderItem(item.id, item.img, item.text);
+            }
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      };
+    }
+
+    // فلتر عزل الألوان واللمعات
     function autoIsolateText(file) {
       return new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
-          const maxDim = 1600;
+          const maxDim = 1500;
           let w = img.width, h = img.height;
           if (w > maxDim || h > maxDim) {
             if (w > h) { h = (h * maxDim) / w; w = maxDim; }
@@ -86,16 +144,27 @@
           const imgData = ctx.getImageData(0, 0, w, h);
           const d = imgData.data;
 
-          // خوارزمية ذكية لعزل الحبر عن أي لون خلفية أو لمعة
           for (let i = 0; i < d.length; i += 4) {
             const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-            // تحويل حاد: الكتابة أسود والخلفية والتصميم أبيض
-            const threshold = 120;
-            const val = gray > threshold ? 255 : 0;
+            const val = gray > 120 ? 255 : 0;
             d[i] = d[i+1] = d[i+2] = val;
           }
           ctx.putImageData(imgData, 0, 0);
-          resolve(canvas.toDataURL('image/jpeg', 0.95));
+          resolve(canvas.toDataURL('image/jpeg', 0.9));
+        };
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    // عمل صورة مصغرة خفيفة جداً (5 كيلوبايت) عشان تطير في السحاب فوراً
+    function createTinyThumb(file) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = 120;
+          canvas.height = 120;
+          ctx.drawImage(img, 0, 0, 120, 120);
+          resolve(canvas.toDataURL('image/jpeg', 0.6));
         };
         img.src = URL.createObjectURL(file);
       });
@@ -106,20 +175,16 @@
       if (!file) return;
 
       loading.style.display = 'block';
-      const originalImgUrl = URL.createObjectURL(file);
 
       try {
-        // 1. عزل التصميم والألوان في الخلفية أوتوماتيكياً
         const processedImage = await autoIsolateText(file);
+        const thumbUrl = await createTinyThumb(file);
 
-        // 2. فحص النصوص بالذكاء الاصطناعي (عربي + إنجليزي)
         const result = await Tesseract.recognize(processedImage, 'ara+eng');
-        
-        // 3. فلتر نسبة الثقة: طرد الرسومات واللوجوهات والاحتفاظ بالنصوص الحقيقية فقط
+
         const validWords = [];
         if (result.data && result.data.words) {
           result.data.words.forEach(word => {
-            // الكلمة لازم تكون بنسبة تأكد أكتر من 55% وليست رموزاً شاذة
             const clean = word.text.replace(/[^a-zA-Z0-9\u0600-\u06FF\-\/\:\.]/g, '').trim();
             if (word.confidence >= 55 && clean.length > 1) {
               validWords.push(clean);
@@ -127,11 +192,23 @@
           });
         }
 
-        const finalText = validWords.join(' ').trim();
-        addItem(originalImgUrl, finalText || "لم يتم العثور على نص واضح (تأكد من الإضاءة)");
+        const finalText = validWords.join(' ').trim() || "كود غير واضح";
+        const uniqueId = Date.now().toString();
+
+        // 1. عرض العنصر محلياً
+        loadedItemIds.add(uniqueId);
+        renderItem(uniqueId, thumbUrl, finalText);
+
+        // 2. إرساله سحابياً للأجهزة الأخرى المتصلة بنفس الغرفة
+        if (currentRoom) {
+          fetch(`https://ntfy.sh/${currentRoom}_scanner`, {
+            method: 'POST',
+            body: JSON.stringify({ id: uniqueId, img: thumbUrl, text: finalText })
+          });
+        }
 
       } catch (err) {
-        alert('حدث خطأ أثناء قراءة الصورة!');
+        alert('حدث خطأ أثناء القراءة!');
         console.error(err);
       } finally {
         loading.style.display = 'none';
@@ -139,9 +216,10 @@
       }
     });
 
-    function addItem(imgSrc, text) {
+    function renderItem(id, imgSrc, text) {
       const li = document.createElement('li');
       li.className = 'item-card';
+      li.dataset.id = id;
 
       const handle = document.createElement('span');
       handle.className = 'handle';
@@ -153,7 +231,6 @@
       const textarea = document.createElement('textarea');
       textarea.className = 'code-text';
       textarea.value = text;
-      textarea.placeholder = "النص المقروء";
 
       const btnDel = document.createElement('button');
       btnDel.className = 'btn-del';
