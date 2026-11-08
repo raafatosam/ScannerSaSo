@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>قارئ أكواد العبوات</title>
+  
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f8; margin: 0; padding: 15px; }
+    h2 { text-align: center; color: #333; margin-bottom: 20px; }
+    .btn-camera { display: block; width: 100%; padding: 16px; background: #007bff; color: white; text-align: center; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; border: none; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,123,255,0.2); }
+    #cameraInput { display: none; }
+    
+    .actions { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .actions button { flex: 1; min-width: 100px; padding: 12px 8px; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; font-size: 14px; }
+    .btn-excel { background: #28a745; }
+    .btn-word { background: #17a2b8; }
+    .btn-print { background: #6c757d; }
+    .btn-sort { background: #ffc107; color: #333 !important; }
+
+    #itemsList { list-style: none; padding: 0; margin: 0; }
+    .item-card { background: white; border-radius: 8px; padding: 10px; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
+    .item-card img { width: 60px; height: 60px; object-fit: cover; border-radius: 6px; border: 1px solid #ddd; }
+    .item-card input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 16px; font-weight: bold; color: #333; }
+    .item-card .handle { cursor: grab; font-size: 22px; color: #aaa; padding: 0 5px; }
+    .btn-del { background: #dc3545; color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+
+    .loading { text-align: center; display: none; color: #007bff; font-weight: bold; margin-bottom: 15px; font-size: 16px; }
+    
+    @media print {
+      body * { visibility: hidden; }
+      #printableArea, #printableArea * { visibility: visible; }
+      #printableArea { position: absolute; left: 0; top: 0; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+  <h2>ماسح أكواد العبوات</h2>
+
+  <label class="btn-camera" for="cameraInput">📸 التقط صورة للكود</label>
+  <input type="file" id="cameraInput" accept="image/*" capture="environment">
+
+  <div id="loading" class="loading">جاري قراءة واستخراج النص... يرجى الانتظار ⏳</div>
+
+  <div class="actions">
+    <button class="btn-sort" onclick="sortAlphabetically()">ترتيب أوتوماتيك (أ-ي)</button>
+    <button class="btn-excel" onclick="exportToExcel()">تصدير Excel</button>
+    <button class="btn-word" onclick="exportToWord()">تصدير Word</button>
+    <button class="btn-print" onclick="printData()">طباعة</button>
+  </div>
+
+  <ul id="itemsList"></ul>
+  <div id="printableArea" style="display:none;"></div>
+
+  <script>
+    const cameraInput = document.getElementById('cameraInput');
+    const itemsList = document.getElementById('itemsList');
+    const loading = document.getElementById('loading');
+
+    new Sortable(itemsList, { handle: '.handle', animation: 150 });
+
+    cameraInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      loading.style.display = 'block';
+      const imgUrl = URL.createObjectURL(file);
+
+      try {
+        const result = await Tesseract.recognize(file, 'eng+ara');
+        const text = result.data.text.trim();
+        addItem(imgUrl, text);
+      } catch (err) {
+        alert('حدث خطأ أثناء قراءة الصورة، يرجى المحاولة مرة أخرى.');
+        console.error(err);
+      } finally {
+        loading.style.display = 'none';
+        cameraInput.value = '';
+      }
+    });
+
+    function addItem(imgSrc, text) {
+      const li = document.createElement('li');
+      li.className = 'item-card';
+      li.innerHTML = `
+        <span class="handle">☰</span>
+        <img src="${imgSrc}">
+        <input type="text" class="code-text" value="${text}" placeholder="الكود المقروء">
+        <button class="btn-del" onclick="this.parentElement.remove()">حذف</button>
+      `;
+      itemsList.appendChild(li);
+    }
+
+    function sortAlphabetically() {
+      const items = Array.from(itemsList.children);
+      items.sort((a, b) => {
+        const valA = a.querySelector('.code-text').value.toLowerCase();
+        const valB = b.querySelector('.code-text').value.toLowerCase();
+        return valA.localeCompare(valB);
+      });
+      items.forEach(item => itemsList.appendChild(item));
+    }
+
+    function getOrderedData() {
+      const inputs = document.querySelectorAll('.code-text');
+      return Array.from(inputs).map((input, index) => ({
+        "م": index + 1,
+        "الكود": input.value
+      }));
+    }
+
+    function exportToExcel() {
+      const data = getOrderedData();
+      if (data.length === 0) return alert('لا توجد بيانات لتصديرها!');
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "الأكواد");
+      XLSX.writeFile(wb, "Package_Codes.xlsx");
+    }
+
+    function exportToWord() {
+      const data = getOrderedData();
+      if (data.length === 0) return alert('لا توجد بيانات لتصديرها!');
+      let content = `<html><head><meta charset="utf-8"></head><body dir="rtl"><h2>قائمة الأكواد</h2><table border="1" cellpadding="6" style="border-collapse:collapse; width:100%;"><tr><th>م</th><th>الكود</th></tr>`;
+      data.forEach(item => {
+        content += `<tr><td>${item['م']}</td><td>${item['الكود']}</td></tr>`;
+      });
+      content += `</table></body></html>`;
+      const blob = new Blob(['\ufeff' + content], { type: 'application/msword' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Package_Codes.doc';
+      a.click();
+    }
+
+    function printData() {
+      const data = getOrderedData();
+      if (data.length === 0) return alert('لا توجد بيانات للطباعة!');
+      const printArea = document.getElementById('printableArea');
+      let table = `<h2 style="text-align:center;">قائمة الأكواد</h2><table border="1" cellpadding="8" style="width:100%; border-collapse:collapse; text-align:right;"><tr><th>م</th><th>الكود</th></tr>`;
+      data.forEach(item => {
+        table += `<tr><td>${item['م']}</td><td>${item['الكود']}</td></tr>`;
+      });
+      table += `</table>`;
+      printArea.innerHTML = table;
+      printArea.style.display = 'block';
+      window.print();
+      printArea.style.display = 'none';
+    }
+  </script>
+</body>
+</html>
